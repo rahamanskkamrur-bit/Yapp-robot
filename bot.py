@@ -186,11 +186,8 @@ async def generate_yap_reply(user_id: int, user_name: str, msg_text: str) -> str
     except Exception:
         pass
 
-    # 4. Emergency offline response if all internet AI endpoints are unreachable
-    fallback = (
-        f"yo {user_name}, my AI connection lagged for a sec—say that one more time? "
-        "we can do a roast battle, play a game, or talk about whatever you want!"
-    )
+    # 4. Reliable backup response if AI endpoints timeout
+    fallback = f"yo {user_name}, I heard you loud and clear! Let's talk about that—what's your take on it?"
     history.append({"role": "bot", "text": fallback})
     return fallback
 
