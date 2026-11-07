@@ -1,4 +1,10 @@
-import asyncio, os, random, re, time, aiohttp
+import asyncio
+import json
+import os
+import re
+import time
+import urllib.parse
+import aiohttp
 from aiohttp import web
 import discord
 from discord.ext import commands
@@ -7,20 +13,24 @@ from discord.ext import commands
 # 1. CONFIGURATION & 24/7 RENDER SETTINGS
 # =====================================================================
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()  # Optional: Uses built-in Yapper Engine if empty!
+# Optional: Works out-of-the-box with built-in Free AI even if GEMINI_API_KEY is left blank!
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 START_TIME = time.time()
 BOT_STATUS = "Starting..."
 
-# Stores conversation history per user so the bot remembers previous messages!
-# Format: {user_id: [{"role": "user"|"bot", "text": "..."}, ...]}
+# Stores conversation history per user so the AI remembers your full chat!
 USER_MEMORY = {}
+# Stores each user's current AI mode: "human" (default), "roast", or "genius"
+USER_MODE = {}
+
 
 # =====================================================================
-# 2. 24/7 KEEP-ALIVE WEB SERVER & AUTO-PINGER
+# 2. 24/7 KEEP-ALIVE WEB SERVER & AUTO-PINGER (FOR RENDER)
 # =====================================================================
 async def handle_ping(req):
     up = int((time.time() - START_TIME) // 60)
-    return web.Response(text=f"Yapping Robot Bot 24/7 | Uptime: {up}m | Status: {BOT_STATUS}")
+    return web.Response(text=f"Yapping AI Bot 24/7 | Uptime: {up}m | Status: {BOT_STATUS}")
+
 
 async def run_web_server():
     app = web.Application()
@@ -29,6 +39,7 @@ async def run_web_server():
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
     await web.TCPSite(runner, "0.0.0.0", port).start()
+
 
 async def self_ping_loop():
     await asyncio.sleep(20)
@@ -42,108 +53,102 @@ async def self_ping_loop():
                 pass
             await asyncio.sleep(240)
 
-# =====================================================================
-# 3. NATURAL HUMAN TEXTING ENGINE (CASUAL & FRIENDLY YAPPING)
-# =====================================================================
-RANDOM_YAP_TOPICS = [
-    "ngl i was just sitting here bored scrolling through the server lol. what have you been up to today?",
-    "lowkey today feels like it's flying by so fast. how's your day been going so far?",
-    "wait i was literally just about to ask how everyone's doing in here. what are you up to rn?",
-    "honestly i'm always down to chat, this channel was getting way too quiet anyway lol. how have you been lately?",
-]
-
-def smart_human_yapper(user_name: str, msg_text: str, history: list) -> str:
-    t = msg_text.lower().strip()
-
-    # 1. Just pinged the bot or said hi / hello / yo
-    if not t or any(w in t for w in ["hi", "hello", "hey", "yo", "sup", "what's up", "whats up", "wassup", "wsg"]):
-        greetings = [
-            f"yooo {user_name}! what's up? how are you doing today?",
-            f"hey {user_name}! good to see you around, how's your day going so far?",
-            f"yo {user_name}! i was just chilling in here lol, how have you been doing?",
-            f"heyyy {user_name}, what's good! how are things going with you today?",
-        ]
-        return random.choice(greetings)
-
-    # 2. Player says they are doing good / great / fine / chilling
-    if any(w in t for w in ["good", "great", "fine", "awesome", "amazing", "happy", "chill", "chilling", "alright", "not bad", "well", "solid"]):
-        good_replies = [
-            f"ayy love to hear that! honestly a chill day is the best kind of day. what have you been up to today, playing anything fun or just relaxing?",
-            f"niceee glad you're doing good {user_name}! what's the plan for the rest of the day?",
-            f"w mood honestly. have you been up to anything cool today or just taking it easy?",
-            f"that's awesome to hear! anything exciting happen today or just a nice normal day?",
-        ]
-        return random.choice(good_replies)
-
-    # 3. Player says they are tired / sleepy / bored
-    if any(w in t for w in ["tired", "sleepy", "exhausted", "bored", "boring", "long day", "drained", "dead"]):
-        tired_replies = [
-            f"nah i feel that 100%, being tired and bored is the worst combo lol. did you barely get any sleep or was today just super long?",
-            f"bro same, today has that sleepy vibe fr. you planning on taking a nap soon or powering through it?",
-            f"oof sounds like a long day. if you're bored we can just yap in here to pass the time lol, what usually wakes you up?",
-        ]
-        return random.choice(tired_replies)
-
-    # 4. Player says they are doing bad / sad / stressed / annoyed
-    if any(w in t for w in ["bad", "sad", "stressed", "annoyed", "mad", "upset", "terrible", "awful", "rough", "not good", "cooked"]):
-        sad_replies = [
-            f"damn i'm sorry to hear that {user_name} :/ rough days seriously suck. you wanna talk/vent about what happened, or rather talk about something random to take your mind off it?",
-            f"aw man, hope things start looking up for you soon fr. what's been stressing you out today?",
-            f"ugh i hate days like that. hang in there though—if you wanna rant about it i'm all ears, what happened?",
-        ]
-        return random.choice(sad_replies)
-
-    # 5. Player asks how the bot is doing
-    if any(w in t for w in ["how are you", "how r u", "hru", "how about you", "wbu", "and you", "how are u", "hbu"]):
-        bot_status_replies = [
-            f"i'm doing pretty good honestly, thanks for asking! just hanging out in chat talking to people. what are you up to right now?",
-            f"honestly can't complain at all! just chilling in the server waiting for someone cool to talk to lol. how's your week been going?",
-            f"doing great ngl! always better when chat is active. you got anything fun planned for today?",
-        ]
-        return random.choice(bot_status_replies)
-
-    # 6. Gaming / Roblox / Server topics
-    if any(w in t for w in ["roblox", "game", "playing", "patrol", "ucpd", "grind", "rank", "shift", "coding", "bot"]):
-        game_replies = [
-            f"ooh nice, how's the grind going on that? have you been playing a lot lately?",
-            f"wait that's actually sick lol, what's your favorite part about it so far?",
-            f"ayy nice! i swear gaming/working on server stuff makes time fly by so fast. how long have you been at it today?",
-        ]
-        return random.choice(game_replies)
-
-    # 7. Ongoing casual follow-up yapping
-    general_followups = [
-        f"wait fr?? no way lol, tell me more about that—what happened next?",
-        f"nah that's actually so real {user_name} 😭 what else have you been up to today?",
-        f"haha fair enough honestly! wait so what's the #1 thing you're looking forward to this week?",
-        f"ohh i see what you mean! lowkey it's always fun yapping with you in here. what else is on your mind?",
-        random.choice(RANDOM_YAP_TOPICS),
-    ]
-    return random.choice(general_followups)
 
 # =====================================================================
-# 4. AI + FALLBACK GENERATOR WITH MEMORY
+# 3. FULL AI BRAIN (MULTI-ENGINE LLM — ANSWERS & DOES EVERYTHING)
 # =====================================================================
+def build_system_prompt(user_name: str, mode: str) -> str:
+    base = (
+        f"You are a super smart, funny, human-like AI friend chatting with {user_name} in a Discord server. "
+        "You can do EVERYTHING a real AI and human friend can do:\n"
+        "- Have natural conversations, ask how they are doing, and react to their exact words.\n"
+        "- Do savage, funny 1v1 roast battles whenever they say 'roast me', 'let's do roast', or insult you.\n"
+        "- Tell them what to do when they are bored, and play games (Truth or Dare, Trivia, 20 Questions, Riddles, Roleplay).\n"
+        "- Answer ANY question accurately (coding, Python, Roblox Luau scripts, math, advice, gaming, general knowledge).\n"
+        "STYLE RULES:\n"
+        "- Text naturally like a real person on Discord (casual tone, 1 to 4 sentences unless they ask for code or a detailed explanation).\n"
+        "- NEVER use generic filler like 'that's so real'. Always reply directly to what they just said!"
+    )
+    if mode == "roast":
+        base += (
+            f"\nCURRENT MODE: ROAST BATTLE MODE. Roast {user_name} creatively and hilariously "
+            "based on what they just said, and challenge them to fire back!"
+        )
+    elif mode == "genius":
+        base += (
+            "\nCURRENT MODE: GENIUS AI HELPER. Give detailed, super helpful, accurate answers, "
+            "working code, or step-by-step explanations."
+        )
+    return base
+
+
+async def query_free_ai_post(messages_payload: list) -> str:
+    """Primary Free Keyless LLM Endpoint (Handles both JSON and plain text responses)."""
+    headers = {"Content-Type": "application/json", "User-Agent": "Mozilla/5.0 DiscordAIBot/3.0"}
+    payload = {
+        "messages": messages_payload,
+        "model": "openai",
+        "temperature": 0.85,
+        "private": True,
+    }
+    async with aiohttp.ClientSession(headers=headers) as s:
+        async with s.post("https://text.pollinations.ai/", json=payload, timeout=15) as r:
+            if r.status == 200:
+                text = (await r.text()).strip()
+                if text and not text.startswith("<!DOCTYPE"):
+                    if text.startswith("{"):
+                        try:
+                            d = json.loads(text)
+                            return d["choices"][0]["message"]["content"].strip()
+                        except Exception:
+                            pass
+                    return text
+    return ""
+
+
+async def query_free_ai_get(sys_inst: str, history: list, user_name: str) -> str:
+    """Backup Free Keyless LLM GET Endpoint (99.9% uptime fallback)."""
+    convo_lines = [f"{user_name if m['role'] == 'user' else 'AI'}: {m['text']}" for m in history[-6:]]
+    full_prompt = "\n".join(convo_lines) + "\nAI:"
+    enc_prompt = urllib.parse.quote(full_prompt)
+    enc_sys = urllib.parse.quote(sys_inst)
+    url = f"https://text.pollinations.ai/{enc_prompt}?model=openai&system={enc_sys}"
+    headers = {"User-Agent": "Mozilla/5.0 DiscordAIBot/3.0"}
+    async with aiohttp.ClientSession(headers=headers) as s:
+        async with s.get(url, timeout=15) as r:
+            if r.status == 200:
+                text = (await r.text()).strip()
+                if text and not text.startswith("<!DOCTYPE"):
+                    return text
+    return ""
+
+
 async def generate_yap_reply(user_id: int, user_name: str, msg_text: str) -> str:
     history = USER_MEMORY.setdefault(user_id, [])
-    history.append({"role": "user", "text": msg_text})
-    if len(history) > 12:
-        history[:] = history[-12:]
+    clean_input = msg_text.strip() if msg_text.strip() else "hey! how are you doing?"
 
+    # Auto-detect mode switches from natural language
+    low = clean_input.lower()
+    if any(w in low for w in ["let's do roast", "lets do roast", "roast battle", "roast me", "flame me", "cook me"]):
+        USER_MODE[user_id] = "roast"
+    elif any(w in low for w in ["stop roast", "chill mode", "normal mode", "truce"]):
+        USER_MODE[user_id] = "human"
+
+    mode = USER_MODE.get(user_id, "human")
+    sys_inst = build_system_prompt(user_name, mode)
+
+    history.append({"role": "user", "text": clean_input})
+    if len(history) > 16:
+        history[:] = history[-16:]
+
+    # 1. Try Official Gemini API if GEMINI_API_KEY is configured
     if GEMINI_API_KEY:
-        sys_inst = (
-            "You are a chill, talkative, friendly human-like person hanging out in a Discord server. "
-            "Do NOT sound like a robot or an AI assistant. Text casually like a real teenager/young adult on Discord "
-            "(using natural lowercase or casual punctuation, words like 'ngl', 'lowkey', 'fr', 'lol', 'bro', 'yo' naturally without overdoing it). "
-            "Ask how they are doing, care about their day, react naturally to what they tell you, and keep the conversation going "
-            "by asking a casual follow-up question. Keep replies to 1-3 short, natural sentences like normal texting."
-        )
         convo_str = "\n".join(f"{user_name if m['role'] == 'user' else 'You'}: {m['text']}" for m in history)
         url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
         payload = {
             "contents": [{"parts": [{"text": convo_str}]}],
             "systemInstruction": {"parts": [{"text": sys_inst}]},
-            "generationConfig": {"temperature": 0.9},
+            "generationConfig": {"temperature": 0.85},
         }
         try:
             async with aiohttp.ClientSession() as s:
@@ -151,17 +156,47 @@ async def generate_yap_reply(user_id: int, user_name: str, msg_text: str) -> str
                     if r.status == 200:
                         data = await r.json()
                         ai_reply = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                        history.append({"role": "bot", "text": ai_reply})
-                        return ai_reply
+                        if ai_reply:
+                            history.append({"role": "bot", "text": ai_reply})
+                            return ai_reply
         except Exception:
             pass
 
-    fallback = smart_human_yapper(user_name, msg_text, history)
+    # 2. Primary Free AI (POST with full conversation history)
+    messages_payload = [{"role": "system", "content": sys_inst}]
+    for m in history[-10:]:
+        messages_payload.append({
+            "role": "user" if m["role"] == "user" else "assistant",
+            "content": m["text"],
+        })
+    try:
+        reply = await query_free_ai_post(messages_payload)
+        if reply:
+            history.append({"role": "bot", "text": reply})
+            return reply
+    except Exception:
+        pass
+
+    # 3. Secondary Free AI (GET endpoint with conversation context)
+    try:
+        reply = await query_free_ai_get(sys_inst, history, user_name)
+        if reply:
+            history.append({"role": "bot", "text": reply})
+            return reply
+    except Exception:
+        pass
+
+    # 4. Emergency offline response if all internet AI endpoints are unreachable
+    fallback = (
+        f"yo {user_name}, my AI connection lagged for a sec—say that one more time? "
+        "we can do a roast battle, play a game, or talk about whatever you want!"
+    )
     history.append({"role": "bot", "text": fallback})
     return fallback
 
+
 # =====================================================================
-# 5. BOT CORE & PING / REPLY DETECTOR (NORMAL HUMAN TEXTING)
+# 4. BOT CORE & PING / REPLY DETECTOR (FULL AI HUMAN TEXTING)
 # =====================================================================
 class YappingBot(commands.Bot):
     def __init__(self, msg_intent: bool = True):
@@ -177,9 +212,9 @@ class YappingBot(commands.Bot):
         BOT_STATUS = f"ONLINE as {self.user}"
         await self.change_presence(
             status=discord.Status.online,
-            activity=discord.Game(name="hanging out in chat"),
+            activity=discord.Game(name="Ping me to chat or roast!"),
         )
-        print(f"✅ Yapping Bot ONLINE as {self.user}")
+        print(f"✅ Full AI Yapping Bot ONLINE as {self.user}")
 
     async def on_message(self, message: discord.Message):
         if message.author.bot or not message.guild:
@@ -187,10 +222,13 @@ class YappingBot(commands.Bot):
 
         await self.process_commands(message)
 
-        # Trigger whenever someone pings the bot OR replies to the bot's message
+        if message.content.startswith("!"):
+            return
+
         is_pinged = self.user in message.mentions
         is_reply_to_bot = (
             message.reference
+            and message.reference.resolved
             and isinstance(message.reference.resolved, discord.Message)
             and message.reference.resolved.author.id == self.user.id
         )
@@ -198,43 +236,75 @@ class YappingBot(commands.Bot):
         if not (is_pinged or is_reply_to_bot):
             return
 
-        # Remove the <@bot_id> tag so we read what the player actually said
+        # Strip the @bot mention tag so the AI reads the clean message
         clean_text = re.sub(rf"<@!?{self.user.id}>", "", message.content).strip()
 
-        # Simulate natural human typing speed before sending plain text
+        # Simulate natural human typing before sending plain text
         async with message.channel.typing():
-            reply_text = await generate_yap_reply(message.author.id, message.author.display_name, clean_text)
-            typing_delay = min(3.0, max(1.0, len(reply_text) * 0.025))
-            await asyncio.sleep(typing_delay)
+            reply_text = await generate_yap_reply(
+                message.author.id,
+                message.author.display_name,
+                clean_text,
+            )
 
-        # Replies with a normal text message just like a real person in Discord!
-        await message.reply(reply_text, mention_author=True)
+        # Split long AI responses (like code or stories) if over 1950 characters
+        for i in range(0, len(reply_text), 1950):
+            chunk = reply_text[i:i + 1950]
+            await message.reply(chunk, mention_author=(i == 0))
 
+
+# =====================================================================
+# 5. COMMANDS (!yap, !mode, !resetconvo, /yap)
+# =====================================================================
 def reg_cmds(b: YappingBot):
-    @b.command(name="yap")
-    async def cmd_yap(ctx: commands.Context, *, message: str = ""):
+    @b.command(name="yap", aliases=["ai", "ask"])
+    async def cmd_yap(ctx: commands.Context, *, message: str = "hey! how are you doing?"):
         async with ctx.channel.typing():
             reply_text = await generate_yap_reply(ctx.author.id, ctx.author.display_name, message)
-            await asyncio.sleep(1.2)
-        await ctx.reply(reply_text, mention_author=True)
+        for i in range(0, len(reply_text), 1950):
+            await ctx.reply(reply_text[i:i + 1950], mention_author=(i == 0))
+
+    @b.command(name="mode")
+    async def cmd_mode(ctx: commands.Context, mode_name: str = "human"):
+        m = mode_name.lower().strip()
+        if m not in ("human", "roast", "genius"):
+            return await ctx.reply(
+                "pick a mode: `!mode human`, `!mode roast`, or `!mode genius`!",
+                mention_author=True,
+            )
+        USER_MODE[ctx.author.id] = m
+        await ctx.reply(
+            f"bet, switched my AI brain to **{m}** mode for you! what's the move?",
+            mention_author=True,
+        )
 
     @b.command(name="resetconvo")
     async def cmd_reset(ctx: commands.Context):
         USER_MEMORY.pop(ctx.author.id, None)
-        await ctx.reply("alright bet, fresh start! what's up, how are you doing?", mention_author=True)
+        USER_MODE.pop(ctx.author.id, None)
+        await ctx.reply(
+            "alright bet, wiped my memory for a fresh start! how are you doing today?",
+            mention_author=True,
+        )
 
-    @b.tree.command(name="yap", description="Start chatting with the bot!")
-    async def slash_yap(interaction: discord.Interaction, message: str = "yo what's up!"):
+    @b.tree.command(name="yap", description="Talk to the AI about anything (chat, roast battle, questions, code)")
+    async def slash_yap(interaction: discord.Interaction, message: str):
         await interaction.response.defer()
         reply_text = await generate_yap_reply(interaction.user.id, interaction.user.display_name, message)
-        await interaction.followup.send(f"{interaction.user.mention} {reply_text}")
+        await interaction.followup.send(f"{interaction.user.mention} {reply_text[:1950]}")
 
+
+# =====================================================================
+# 6. MAIN ENTRYPOINT
+# =====================================================================
 async def main():
     await run_web_server()
     asyncio.create_task(self_ping_loop())
     if not BOT_TOKEN:
+        print("❌ ERROR: BOT_TOKEN environment variable is missing!")
         while True:
             await asyncio.sleep(3600)
+
     bot = YappingBot(True)
     reg_cmds(bot)
     try:
@@ -244,6 +314,7 @@ async def main():
         bot = YappingBot(False)
         reg_cmds(bot)
         await bot.start(BOT_TOKEN)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
